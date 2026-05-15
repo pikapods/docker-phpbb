@@ -20,6 +20,8 @@ services:
 
   phpbb:
     image: ${PHPBB_IMAGE:-ghcr.io/pikapods/docker-phpbb:latest}
+    build:
+      context: .
     depends_on:
       mariadb:
         condition: service_healthy
@@ -37,7 +39,7 @@ services:
     volumes:
       - phpbb-data:/data
     ports:
-      - "8080:8080"
+      - "${PHPBB_HTTP_PORT:-8080}:8080"
     restart: unless-stopped
 
 volumes:

@@ -237,7 +237,9 @@ log "rendering installer config -> $INSTALL_YML"
     printf '    board:\n'
     printf '        lang: %s\n'         "$(yq "$PHPBB_BOARD_LANG")"
     printf '        name: %s\n'         "$(yq "$PHPBB_BOARD_NAME")"
-    printf '        description: %s\n'  "$(yq "$PHPBB_BOARD_DESC")"
+    if [ -n "$PHPBB_BOARD_DESC" ]; then
+        printf '        description: %s\n'  "$(yq "$PHPBB_BOARD_DESC")"
+    fi
     printf '    database:\n'
     printf '        dbms: %s\n'         "$(yq "$PHPBB_DB_DRIVER")"
     printf '        dbhost: %s\n'       "$(yq "$PHPBB_DB_HOST")"

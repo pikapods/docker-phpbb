@@ -1,0 +1,53 @@
+listen ${NGINX_HTTP_PORT} default_server;
+listen [::]:${NGINX_HTTP_PORT} default_server;
+
+root $NGINX_WEBROOT;
+
+# Set allowed "index" files
+index index.html index.htm index.php;
+
+server_name _;
+
+charset utf-8;
+
+absolute_redirect off;
+
+# Healthcheck: Set /healthcheck to be the static health check URL
+location /healthcheck {
+    access_log off;
+
+    # set max 5 seconds for healthcheck
+    fastcgi_read_timeout 5s;
+
+    include        fastcgi_params;
+    fastcgi_param  SCRIPT_NAME     /healthcheck;
+    fastcgi_param  SCRIPT_FILENAME /healthcheck;
+    fastcgi_pass   127.0.0.1:9000;
+}
+
+# Have NGINX try searching for PHP files as well
+location / {
+    try_files $uri $uri/ /index.php?$query_string;
+}
+
+# Block PHP execution in storage directory to prevent uploaded malicious PHP files from running
+# Reference: Livewire arbitrary file upload (GHSA-29cq-5w36-x7w3)
+location ~* ^/storage/.*\.php$ {
+    deny all;
+}
+
+# Pass "*.php" files to PHP-FPM
+location ~ \.php$ {
+    fastcgi_pass   127.0.0.1:9000;
+    fastcgi_index  index.php;
+    fastcgi_param  SCRIPT_FILENAME  $document_root$fastcgi_script_name;
+    include        fastcgi_params;
+    fastcgi_buffers $NGINX_FASTCGI_BUFFERS;
+    fastcgi_buffer_size $NGINX_FASTCGI_BUFFER_SIZE;
+    fastcgi_read_timeout $PHP_MAX_EXECUTION_TIME;
+}
+
+include /etc/nginx/site-opts.d/phpbb.conf;
+
+# additional config
+include /etc/nginx/server-opts.d/*.conf;

@@ -44,12 +44,12 @@ RUN apk add --no-cache \
         zip
 
 # Fetch the official release zip (vendor/ pre-bundled — no composer step needed).
-# The archive expands to a top-level phpBB/ directory; flatten into /var/www/html
+# The archive expands to a top-level phpBB3/ directory; flatten into /var/www/html
 # and strip docs/ to trim the image.
 RUN curl -fsSL -o /tmp/phpbb.zip "${PHPBB_DOWNLOAD_URL}" \
     && unzip -q /tmp/phpbb.zip -d /tmp/phpbb-extract \
     && rm -rf /var/www/html \
-    && mv /tmp/phpbb-extract/phpBB /var/www/html \
+    && mv /tmp/phpbb-extract/phpBB3 /var/www/html \
     && rm -rf /tmp/phpbb.zip /tmp/phpbb-extract /var/www/html/docs
 
 # Replace persistent paths with symlinks into /data.
@@ -116,6 +116,7 @@ ENV AUTORUN_ENABLED=false \
     SSL_MODE=off \
     ENABLE_PHPBB_CRON=TRUE \
     APP_BASE_DIR=/var/www/html \
+    NGINX_WEBROOT=/var/www/html \
     PHPBB_CRON_INTERVAL=300 \
     PHPBB_VERSION=${PHPBB_VERSION}
 
