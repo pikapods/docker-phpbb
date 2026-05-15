@@ -378,6 +378,14 @@ def test_admin_can_log_in(stack):
     jar = http.cookiejar.CookieJar()
     opener = urllib.request.build_opener(urllib.request.HTTPCookieProcessor(jar))
 
+    # Hit /index.php first so phpBB issues a stable guest session before the
+    # login form is rendered. Going straight to ucp.php?mode=login as the very
+    # first request can land in a state where the form_token generated on GET
+    # doesn't validate on POST (observed after the in-session container
+    # restarts performed by earlier tests).
+    with opener.open(f"{base}/index.php", timeout=10) as r:
+        r.read()
+
     # 1. GET login form, harvest hidden tokens + session cookie.
     with opener.open(f"{base}/ucp.php?mode=login", timeout=10) as r:
         assert r.status == 200
