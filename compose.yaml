@@ -1,0 +1,45 @@
+name: phpbb
+
+services:
+  mariadb:
+    image: mariadb:11
+    environment:
+      MARIADB_DATABASE: phpbb
+      MARIADB_USER: phpbb
+      MARIADB_PASSWORD: changeme         # change before any real deployment
+      MARIADB_RANDOM_ROOT_PASSWORD: "1"
+    volumes:
+      - mariadb-data:/var/lib/mysql
+    healthcheck:
+      test: ["CMD", "healthcheck.sh", "--connect", "--innodb_initialized"]
+      interval: 5s
+      timeout: 3s
+      retries: 12
+      start_period: 10s
+    restart: unless-stopped
+
+  phpbb:
+    image: ${PHPBB_IMAGE:-ghcr.io/pikapods/docker-phpbb:latest}
+    depends_on:
+      mariadb:
+        condition: service_healthy
+    environment:
+      PHPBB_DB_DRIVER: mysqli
+      PHPBB_DB_HOST: mariadb
+      PHPBB_DB_NAME: phpbb
+      PHPBB_DB_USER: phpbb
+      PHPBB_DB_PASS: changeme
+      PHPBB_ADMIN_USER: admin
+      PHPBB_ADMIN_PASS: changeme
+      PHPBB_ADMIN_EMAIL: admin@example.com
+      PHPBB_BOARD_NAME: "My phpBB Forum"
+      PHPBB_SERVER_NAME: localhost
+    volumes:
+      - phpbb-data:/data
+    ports:
+      - "8080:8080"
+    restart: unless-stopped
+
+volumes:
+  mariadb-data:
+  phpbb-data:

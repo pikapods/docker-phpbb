@@ -1,0 +1,38 @@
+#!/command/with-contenv sh
+# phpBB cron worker — periodic in-container hit on /cron.php.
+# phpBB triggers cron tasks (prune, stats, queue) opportunistically on user
+# requests; on a low-traffic board they may never fire, so we drive them.
+#
+# Disable by setting ENABLE_PHPBB_CRON=FALSE (any value other than TRUE).
+
+[ "${ENABLE_PHPBB_CRON:-TRUE}" = "TRUE" ] || exec sleep infinity
+
+# Validate PHPBB_CRON_INTERVAL: positive integer (>= 1). A non-numeric value
+# would make `sleep` error and s6 would restart the service in a tight loop;
+# zero would do the same without erroring. Fall back to the documented default
+# with a warning rather than crashlooping.
+INTERVAL_RAW=${PHPBB_CRON_INTERVAL:-300}
+case "$INTERVAL_RAW" in
+    ''|*[!0-9]*)
+        echo "[phpbb-cron] WARN: PHPBB_CRON_INTERVAL='$INTERVAL_RAW' is not a positive integer; using 300" >&2
+        INTERVAL=300
+        ;;
+    *)
+        if [ "$INTERVAL_RAW" -lt 1 ]; then
+            echo "[phpbb-cron] WARN: PHPBB_CRON_INTERVAL='$INTERVAL_RAW' must be >= 1; using 300" >&2
+            INTERVAL=300
+        else
+            INTERVAL=$INTERVAL_RAW
+        fi
+        ;;
+esac
+
+while :; do
+    # -fsS: fail on HTTP >= 400 silently, surface curl errors.
+    # 30s timeout: a stuck cron task should not wedge the worker forever.
+    # Failures are logged but never abort the loop — phpBB cron is best-effort.
+    timeout -s TERM -k 5 30 \
+        curl -fsS "http://localhost:8080/cron.php" -o /dev/null \
+        >&2 || true
+    sleep "$INTERVAL"
+done
