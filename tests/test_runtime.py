@@ -327,17 +327,16 @@ def test_cron_longrun_alive(stack):
 
 def test_cron_php_hit_recently(stack):
     # The fixture sets PHPBB_CRON_INTERVAL=10s; give the worker two cycles
-    # to land at least one /cron.php request in the access log.
+    # to land at least one /cron.php request. The base image's nginx writes
+    # access logs to /dev/stdout (no file at /var/log/nginx/access.log), so
+    # the request shows up in `docker logs` rather than on disk.
     deadline = time.time() + 30
     while time.time() < deadline:
-        r = _exec(
-            stack["bb"], "sh", "-c",
-            "grep -F /cron.php /var/log/nginx/access.log 2>/dev/null | head -1",
-        )
-        if r.returncode == 0 and r.stdout.strip():
+        r = _sh("docker", "logs", stack["bb"], check=False)
+        if "/cron.php" in (r.stdout + r.stderr):
             return
         time.sleep(2)
-    pytest.fail("no /cron.php request observed in nginx access log within 30s")
+    pytest.fail("no /cron.php request observed in container logs within 30s")
 
 
 def test_healthcheck_reports_healthy(stack):
@@ -371,7 +370,11 @@ _HIDDEN_RE = re.compile(
 
 
 def test_admin_can_log_in(stack):
-    base = f"http://127.0.0.1:{stack['port']}"
+    # Earlier session-scoped tests `docker restart` the container; with
+    # `-p 0:8080` the host port is reassigned on each restart, so the
+    # fixture's cached value goes stale. Re-query before connecting.
+    port = _host_port(stack["bb"], "8080")
+    base = f"http://127.0.0.1:{port}"
     jar = http.cookiejar.CookieJar()
     opener = urllib.request.build_opener(urllib.request.HTTPCookieProcessor(jar))
 
