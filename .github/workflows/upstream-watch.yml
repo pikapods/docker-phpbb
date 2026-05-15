@@ -46,6 +46,16 @@ jobs:
             exit 0
           fi
 
+          # phpBB tags GitHub releases before the download mirror catches up.
+          # Skip this cycle if the zip isn't there yet; next hour's run will retry.
+          zip_url="https://download.phpbb.com/pub/release/${upstream_series}/${upstream}/phpBB-${upstream}.zip"
+          zip_status=$(curl -sI -o /dev/null -w '%{http_code}' "${zip_url}")
+          if [ "${zip_status}" != "200" ]; then
+            echo "download not yet available at ${zip_url} (HTTP ${zip_status}); will retry next run"
+            echo "published=true" >>"$GITHUB_OUTPUT"
+            exit 0
+          fi
+
           # Ask GHCR's OCI registry whether the tag is already published.
           # The token endpoint hands out anonymous pull tokens for public
           # images; for private images, swap in a PAT with read:packages.

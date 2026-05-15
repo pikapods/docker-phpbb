@@ -11,7 +11,6 @@ ARG PHP_VERSION=8.3
 FROM serversideup/php:${PHP_VERSION}-fpm-nginx-alpine
 
 ARG PHPBB_VERSION=3.3.16
-ARG PHPBB_DOWNLOAD_URL=https://download.phpbb.com/pub/release/3.3/${PHPBB_VERSION}/phpBB-${PHPBB_VERSION}.zip
 
 LABEL org.opencontainers.image.title="phpBB" \
       org.opencontainers.image.description="Self-maintained phpBB container" \
@@ -46,7 +45,9 @@ RUN apk add --no-cache \
 # Fetch the official release zip (vendor/ pre-bundled — no composer step needed).
 # The archive expands to a top-level phpBB3/ directory; flatten into /var/www/html
 # and strip docs/ to trim the image.
-RUN curl -fsSL -o /tmp/phpbb.zip "${PHPBB_DOWNLOAD_URL}" \
+RUN series="${PHPBB_VERSION%.*}" \
+    && curl -fsSL -o /tmp/phpbb.zip \
+         "https://download.phpbb.com/pub/release/${series}/${PHPBB_VERSION}/phpBB-${PHPBB_VERSION}.zip" \
     && unzip -q /tmp/phpbb.zip -d /tmp/phpbb-extract \
     && rm -rf /var/www/html \
     && mv /tmp/phpbb-extract/phpBB3 /var/www/html \
