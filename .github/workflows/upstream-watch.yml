@@ -50,20 +50,24 @@ jobs:
           current_digest=$(crane digest "${BASE_REF}")
           echo "current base digest: ${current_digest}"
 
-          # phpBB tags releases as `release-3.3.16`, not `v3.3.16`.
-          upstream_tag=$(gh api repos/phpbb/phpbb/releases/latest --jq .tag_name)
-          echo "upstream_tag=${upstream_tag}"
-
-          upstream="${upstream_tag#release-}"
-          # Defensive: also strip a leading v in case upstream changes scheme.
-          upstream="${upstream#v}"
-          echo "upstream=${upstream}"
-
-          upstream_series="${upstream%.*}"
-          if [ "${upstream_series}" != "${SERIES}" ]; then
-            echo "upstream ${upstream} is outside pinned series ${SERIES}; skipping auto-rebuild"
+          # phpbb/phpbb publishes git tags (e.g. release-3.3.16) but does
+          # not cut GitHub Releases, so releases/latest 404s. Pull tags and
+          # filter for stable in-series — the regex drops -RCx / -ax /
+          # other prerelease suffixes, then version-sort picks the highest.
+          series_re="^release-${SERIES//./\\.}\\.[0-9]+\$"
+          upstream=$(
+            gh api 'repos/phpbb/phpbb/tags?per_page=30' --jq '.[].name' \
+              | grep -E "${series_re}" \
+              | sed 's/^release-//' \
+              | sort -V \
+              | tail -n 1
+          )
+          if [ -z "${upstream}" ]; then
+            echo "no stable release tag found for series ${SERIES}"
             exit 0
           fi
+          echo "upstream=${upstream}"
+          upstream_series="${upstream%.*}"
 
           # phpBB tags GitHub releases before the download mirror catches up.
           # Skip this cycle if the zip isn't there yet; next hour's run will retry.
