@@ -397,6 +397,14 @@ def test_admin_can_log_in(stack):
     assert "creation_time" in hidden, "creation_time hidden field not found in login form"
     assert "form_token" in hidden, "form_token hidden field not found in login form"
 
+    # phpBB's check_form_key() requires `time() - creation_time` to be > 0
+    # (the `$diff &&` guard treats 0 as a bot-like instant submission). In CI
+    # the GET+POST can complete within the same wall-clock second and the
+    # token validates as invalid — phpBB then renders "Form submission
+    # invalid", which is a 200 with no marker the credentials check would
+    # produce. Sleeping past the second boundary deflakes it.
+    time.sleep(1.1)
+
     # 2. POST credentials with the harvested tokens. The login button name is
     # `login`; phpBB checks for its presence to dispatch the auth path.
     payload = {
@@ -422,7 +430,12 @@ def test_admin_can_log_in(stack):
         body = r.read().decode("utf-8", errors="replace")
 
     lower = body.lower()
-    bad_markers = ("incorrect password", "incorrect username", "you have entered an invalid")
+    bad_markers = (
+        "incorrect password",
+        "incorrect username",
+        "you have entered an invalid",
+        "form submission invalid",
+    )
     for marker in bad_markers:
         assert marker not in lower, f"login appears to have failed (marker={marker!r})"
     # On success phpBB issues a phpbb3_*_u cookie set to the user id (>1 = real user, 1 = anon).
