@@ -9,9 +9,15 @@ and the benefit of the wider community. To run your own phpBB pod from
 $2.3/month, see
 [pikapods.com/pods?run=phpbb](https://www.pikapods.com/pods?run=phpbb).
 
-Published to both `ghcr.io/pikapods/docker-phpbb:<phpbb-version>` and
-`pikapods/docker-phpbb:<phpbb-version>` (Docker Hub) — pick whichever
-registry you prefer.
+Published to both `ghcr.io/pikapods/docker-phpbb` and
+`pikapods/docker-phpbb` (Docker Hub) — pick whichever registry you prefer.
+Three tag patterns are pushed per build:
+
+| Tag         | Mutability | Use for                                                  |
+|-------------|------------|----------------------------------------------------------|
+| `latest`    | mutable    | Most recent build of the most recent in-series stable    |
+| `3.3.16`    | mutable    | Pin to a phpBB version; auto-receive base-image patches  |
+| `3.3.16-r1` | immutable  | Byte-for-byte reproducibility; never reused              |
 
 Source: https://github.com/pikapods/docker-phpbb
 

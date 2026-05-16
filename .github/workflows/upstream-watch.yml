@@ -13,6 +13,20 @@ env:
   # bumps within this line, e.g. 3.3.16 -> 3.3.17. Bump this manually to opt
   # into a new series (4.0); use workflow_dispatch on build.yml for one-off
   # out-of-series builds.
+  #
+  # Two independent triggers:
+  #
+  # 1. New-version detection. Polls phpBB's `releases/latest` and skips when
+  #    the upstream tag is outside SERIES or the download mirror hasn't
+  #    caught up yet.
+  #
+  # 2. Base-image drift detection. Resolves the current serversideup/php
+  #    digest and compares against the digest recorded in the published
+  #    image's OCI labels. Drift only triggers a rebuild for the current
+  #    in-series upstream version; the rebuild bumps the immutable -rN
+  #    suffix and refreshes the mutable <version> tag in place, so users
+  #    pinned to 3.3.16 receive Alpine/PHP/nginx security patches without
+  #    re-pinning.
   SERIES: "3.3"
 
 jobs:
@@ -23,12 +37,18 @@ jobs:
       actions: write
       packages: read
     steps:
-      - name: Compare upstream release to published tags
+      - uses: imjasonh/setup-crane@v0.4
+
+      - name: Find build to trigger
         id: check
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
         run: |
           set -euo pipefail
+
+          BASE_REF="serversideup/php:${PHP_VERSION}-fpm-nginx-alpine"
+          current_digest=$(crane digest "${BASE_REF}")
+          echo "current base digest: ${current_digest}"
 
           # phpBB tags releases as `release-3.3.16`, not `v3.3.16`.
           upstream_tag=$(gh api repos/phpbb/phpbb/releases/latest --jq .tag_name)
@@ -42,7 +62,6 @@ jobs:
           upstream_series="${upstream%.*}"
           if [ "${upstream_series}" != "${SERIES}" ]; then
             echo "upstream ${upstream} is outside pinned series ${SERIES}; skipping auto-rebuild"
-            echo "published=true" >>"$GITHUB_OUTPUT"
             exit 0
           fi
 
@@ -52,7 +71,6 @@ jobs:
           zip_status=$(curl -sI -o /dev/null -w '%{http_code}' "${zip_url}")
           if [ "${zip_status}" != "200" ]; then
             echo "download not yet available at ${zip_url} (HTTP ${zip_status}); will retry next run"
-            echo "published=true" >>"$GITHUB_OUTPUT"
             exit 0
           fi
 
@@ -67,20 +85,46 @@ jobs:
             -H 'Accept: application/vnd.docker.distribution.manifest.v2+json' \
             "https://${REGISTRY}/v2/${IMAGE_NAME}/manifests/${upstream}")
 
-          if [ "${status}" = "200" ]; then
-            echo "published=true"  >>"$GITHUB_OUTPUT"
-            echo "${upstream} already published"
-          else
-            echo "published=false" >>"$GITHUB_OUTPUT"
-            echo "upstream=${upstream}" >>"$GITHUB_OUTPUT"
+          reason=""
+          if [ "${status}" != "200" ]; then
+            reason="new-version"
             echo "${upstream} not in registry (HTTP ${status}); will trigger build"
+          else
+            # --- Base-image drift detection ---
+            # Compare current base digest against the one baked into the
+            # published image's labels. Mismatch => rebuild same version
+            # against the fresh base; build.yml bumps -rN.
+            cfg=$(crane config "${REGISTRY}/${IMAGE_NAME}:${upstream}" 2>/dev/null || true)
+            if [ -z "${cfg}" ]; then
+              echo "${upstream} manifest exists but config unreadable; drift check N/A"
+              exit 0
+            fi
+            published_digest=$(echo "${cfg}" | jq -r '.config.Labels["org.opencontainers.image.base.digest"] // empty')
+            if [ "${published_digest}" = "${current_digest}" ]; then
+              echo "${upstream} base digest matches (${current_digest}); no drift"
+              exit 0
+            fi
+            reason="base-drift"
+            echo "${upstream} base drift: published=${published_digest:-<none>} current=${current_digest}; will trigger rebuild"
           fi
 
+          {
+            echo "upstream=${upstream}"
+            echo "base_digest=${current_digest}"
+            echo "reason=${reason}"
+          } >>"$GITHUB_OUTPUT"
+
       - name: Trigger build
-        if: steps.check.outputs.published == 'false'
+        if: steps.check.outputs.upstream != ''
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          UPSTREAM: ${{ steps.check.outputs.upstream }}
+          BASE_DIGEST: ${{ steps.check.outputs.base_digest }}
+          REASON: ${{ steps.check.outputs.reason }}
         run: |
+          echo "triggering build for ${UPSTREAM} (${REASON})"
           gh workflow run build.yml \
-            -f phpbb_version='${{ steps.check.outputs.upstream }}' \
-            -f php_version='${{ env.PHP_VERSION }}'
+            --repo "${GITHUB_REPOSITORY}" \
+            -f phpbb_version="${UPSTREAM}" \
+            -f php_version="${PHP_VERSION}" \
+            -f base_digest="${BASE_DIGEST}"

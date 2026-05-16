@@ -8,15 +8,32 @@
 #     -t ghcr.io/pikapods/docker-phpbb:3.3.16-php8.3 .
 
 ARG PHP_VERSION=8.3
-FROM serversideup/php:${PHP_VERSION}-fpm-nginx-alpine
+# BASE_IMAGE is composed by build.yml as serversideup/php:<minor>-fpm-nginx-alpine
+# optionally suffixed with @sha256:... when the watcher resolved a digest. Local
+# builds without a digest fall through to the floating tag.
+ARG BASE_IMAGE=serversideup/php:${PHP_VERSION}-fpm-nginx-alpine
+FROM ${BASE_IMAGE}
 
 ARG PHPBB_VERSION=3.3.16
+
+# Build identity. IMAGE_REVISION is bumped by build.yml when the same
+# PHPBB_VERSION is rebuilt against a new base digest (security patch).
+# BASE_DIGEST is the resolved sha256 the FROM line pinned to; upstream-watch
+# reads it back off the published image to detect base-image drift.
+ARG IMAGE_REVISION=r1
+ARG BASE_DIGEST=
+ARG GIT_SHA=
+ARG BUILD_DATE=
 
 LABEL org.opencontainers.image.title="phpBB" \
       org.opencontainers.image.description="Self-maintained phpBB container" \
       org.opencontainers.image.source="https://github.com/pikapods/docker-phpbb" \
       org.opencontainers.image.licenses="GPL-2.0" \
-      org.opencontainers.image.version="${PHPBB_VERSION}"
+      org.opencontainers.image.version="${PHPBB_VERSION}-${IMAGE_REVISION}" \
+      org.opencontainers.image.revision="${GIT_SHA}" \
+      org.opencontainers.image.created="${BUILD_DATE}" \
+      org.opencontainers.image.base.name="serversideup/php:${PHP_VERSION}-fpm-nginx-alpine" \
+      org.opencontainers.image.base.digest="${BASE_DIGEST}"
 
 USER root
 

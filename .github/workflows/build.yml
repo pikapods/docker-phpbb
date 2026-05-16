@@ -17,9 +17,25 @@ on:
         required: false
         default: true
         type: boolean
+      base_digest:
+        description: "sha256 of the base image to pin (optional; resolved on-demand otherwise)"
+        required: false
+        default: ""
+        type: string
+      revision:
+        description: "Manual revision override (e.g. r1). Otherwise computed by reading the prior published label."
+        required: false
+        default: ""
+        type: string
   push:
     tags:
       - "v*"
+
+# Serialize builds so revision computation can't race itself: two concurrent
+# runs against the same PHPBB_VER would otherwise both read 'r2' and both
+# write 'r3'. With concurrency: build, the second run reads the first's
+# freshly-pushed label and computes the next number correctly.
+concurrency: build
 
 env:
   REGISTRY: ghcr.io
@@ -30,10 +46,12 @@ jobs:
     runs-on: ubuntu-latest
     permissions:
       contents: read
+      packages: read
     outputs:
       phpbb_version: ${{ steps.vars.outputs.phpbb_version }}
       php_version: ${{ steps.vars.outputs.php_version }}
-      image_tag: ${{ steps.vars.outputs.image_tag }}
+      revision: ${{ steps.revision.outputs.revision }}
+      base_digest: ${{ steps.base.outputs.base_digest }}
     steps:
       - uses: actions/checkout@v6
 
@@ -48,9 +66,66 @@ jobs:
             BB_VER="${GITHUB_REF_NAME#v}"
             PHP_VER="8.3"
           fi
+          BUILD_DATE=$(date -u +%Y-%m-%dT%H:%M:%SZ)
           echo "phpbb_version=$BB_VER" >>"$GITHUB_OUTPUT"
           echo "php_version=$PHP_VER"  >>"$GITHUB_OUTPUT"
-          echo "image_tag=${BB_VER}-php${PHP_VER}" >>"$GITHUB_OUTPUT"
+          echo "build_date=$BUILD_DATE" >>"$GITHUB_OUTPUT"
+
+      - uses: imjasonh/setup-crane@v0.4
+
+      - name: Resolve base image digest
+        id: base
+        env:
+          PHP_VER: ${{ steps.vars.outputs.php_version }}
+          INPUT_DIGEST: ${{ inputs.base_digest }}
+        run: |
+          set -euo pipefail
+          BASE_REF="serversideup/php:${PHP_VER}-fpm-nginx-alpine"
+          if [ -n "${INPUT_DIGEST}" ]; then
+            digest="${INPUT_DIGEST}"
+            echo "using digest provided by caller: ${digest}"
+          else
+            digest=$(crane digest "${BASE_REF}")
+            echo "resolved current digest: ${digest}"
+          fi
+          echo "base_digest=${digest}" >>"$GITHUB_OUTPUT"
+          echo "base_image=${BASE_REF}@${digest}" >>"$GITHUB_OUTPUT"
+
+      - name: Compute image revision
+        id: revision
+        env:
+          BB_VER: ${{ steps.vars.outputs.phpbb_version }}
+          INPUT_REVISION: ${{ inputs.revision }}
+        run: |
+          set -euo pipefail
+          if [ -n "${INPUT_REVISION}" ]; then
+            echo "revision=${INPUT_REVISION}" >>"$GITHUB_OUTPUT"
+            echo "using revision override: ${INPUT_REVISION}"
+            exit 0
+          fi
+          # Read the published mutable tag's image.version label
+          # (form: <phpbb-version>-<revision>, e.g. 3.3.16-r1). Increment
+          # the trailing rN. Missing tag, missing label, or non-rN suffix
+          # all fall back to r1 — covers first builds and legacy images
+          # published before the -rN scheme rolled out.
+          REF="${REGISTRY}/${IMAGE_NAME}:${BB_VER}"
+          if cfg=$(crane config "${REF}" 2>/dev/null); then
+            prev=$(echo "${cfg}" | jq -r '.config.Labels["org.opencontainers.image.version"] // empty')
+            prev_rev="${prev##*-}"
+            case "${prev_rev}" in
+              r[0-9]*)
+                next=$(( ${prev_rev#r} + 1 ))
+                revision="r${next}"
+                ;;
+              *)
+                revision="r1"
+                ;;
+            esac
+          else
+            revision="r1"
+          fi
+          echo "computed revision: ${revision} (prev label: ${prev:-<none>})"
+          echo "revision=${revision}" >>"$GITHUB_OUTPUT"
 
       - uses: docker/setup-qemu-action@v4
       - uses: docker/setup-buildx-action@v4
@@ -64,6 +139,11 @@ jobs:
           build-args: |
             PHPBB_VERSION=${{ steps.vars.outputs.phpbb_version }}
             PHP_VERSION=${{ steps.vars.outputs.php_version }}
+            BASE_IMAGE=${{ steps.base.outputs.base_image }}
+            BASE_DIGEST=${{ steps.base.outputs.base_digest }}
+            IMAGE_REVISION=${{ steps.revision.outputs.revision }}
+            GIT_SHA=${{ github.sha }}
+            BUILD_DATE=${{ steps.vars.outputs.build_date }}
           tags: phpbb:test
           provenance: false
 
@@ -235,23 +315,36 @@ jobs:
           username: ${{ secrets.DOCKERHUB_USERNAME }}
           password: ${{ secrets.DOCKERHUB_TOKEN }}
 
-      # Push three refs to each registry:
-      #   <version>-php<minor>   fully qualified
-      #   <version>              plain phpBB version alias — resolves to whichever
-      #                          PHP build this run produced
-      #   latest
+      # Push refs to each registry:
+      #   <version>-<revision>   immutable (e.g. 3.3.16-r2). This exact build,
+      #                          never reused. Pin here for byte-for-byte
+      #                          reproducibility.
+      #   <version>              mutable phpBB-version alias (e.g. 3.3.16).
+      #                          Floats to the latest revision so base-image
+      #                          security rebuilds land in place — users pinned
+      #                          here receive patches without re-pinning.
+      #   latest                 floating pointer — only published for stable
+      #                          releases (MAJOR.MINOR.PATCH). Future
+      #                          prerelease tags (-RC1, -PL1) would publish
+      #                          their own refs but never claim latest.
       - name: Tag and push
         env:
           BB_VER: ${{ needs.build.outputs.phpbb_version }}
-          IMAGE_TAG: ${{ needs.build.outputs.image_tag }}
+          REVISION: ${{ needs.build.outputs.revision }}
           DOCKERHUB_REPO: ${{ secrets.DOCKERHUB_USERNAME }}/docker-phpbb
         run: |
           set -euo pipefail
+          is_stable=false
+          if [[ "${BB_VER}" =~ ^[0-9]+\.[0-9]+\.[0-9]+$ ]]; then
+            is_stable=true
+          fi
           for REPO in "${REGISTRY}/${IMAGE_NAME}" "docker.io/${DOCKERHUB_REPO}"; do
-            docker tag phpbb:test "${REPO}:${IMAGE_TAG}"
+            docker tag phpbb:test "${REPO}:${BB_VER}-${REVISION}"
             docker tag phpbb:test "${REPO}:${BB_VER}"
-            docker tag phpbb:test "${REPO}:latest"
-            docker push "${REPO}:${IMAGE_TAG}"
+            docker push "${REPO}:${BB_VER}-${REVISION}"
             docker push "${REPO}:${BB_VER}"
-            docker push "${REPO}:latest"
+            if [ "${is_stable}" = "true" ]; then
+              docker tag phpbb:test "${REPO}:latest"
+              docker push "${REPO}:latest"
+            fi
           done
