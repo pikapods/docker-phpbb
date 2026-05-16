@@ -78,27 +78,24 @@ jobs:
             exit 0
           fi
 
-          # Ask GHCR's OCI registry whether the tag is already published.
-          # The token endpoint hands out anonymous pull tokens for public
-          # images; for private images, swap in a PAT with read:packages.
-          token=$(curl -fsS "https://${REGISTRY}/token?service=${REGISTRY}&scope=repository:${IMAGE_NAME}:pull" | jq -r .token)
+          # Authenticate crane to GHCR so the manifest/config probes work
+          # against private packages too. With public packages this is
+          # redundant — but cheap, and required when the package doesn't
+          # exist yet (GHCR 403s anonymous reads of nonexistent repos,
+          # indistinguishable from auth failure).
+          crane auth login "${REGISTRY}" -u "${GITHUB_ACTOR}" -p "${GH_TOKEN}"
 
-          status=$(curl -s -o /dev/null -w '%{http_code}' \
-            -H "Authorization: Bearer ${token}" \
-            -H 'Accept: application/vnd.oci.image.manifest.v1+json' \
-            -H 'Accept: application/vnd.docker.distribution.manifest.v2+json' \
-            "https://${REGISTRY}/v2/${IMAGE_NAME}/manifests/${upstream}")
-
+          REF="${REGISTRY}/${IMAGE_NAME}:${upstream}"
           reason=""
-          if [ "${status}" != "200" ]; then
+          if ! crane manifest "${REF}" >/dev/null 2>&1; then
             reason="new-version"
-            echo "${upstream} not in registry (HTTP ${status}); will trigger build"
+            echo "${upstream} not in registry; will trigger build"
           else
             # --- Base-image drift detection ---
             # Compare current base digest against the one baked into the
             # published image's labels. Mismatch => rebuild same version
             # against the fresh base; build.yml bumps -rN.
-            cfg=$(crane config "${REGISTRY}/${IMAGE_NAME}:${upstream}" 2>/dev/null || true)
+            cfg=$(crane config "${REF}" 2>/dev/null || true)
             if [ -z "${cfg}" ]; then
               echo "${upstream} manifest exists but config unreadable; drift check N/A"
               exit 0
