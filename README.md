@@ -125,14 +125,14 @@ later, edit the values via the ACP "Server settings" page.
 
 | Var                    | Default | Purpose                                                       |
 |------------------------|---------|---------------------------------------------------------------|
-| `ENABLE_PHPBB_CRON`    | `TRUE`  | Set `FALSE` to disable the in-container `/cron.php` driver.   |
-| `PHPBB_CRON_INTERVAL`  | `300`   | Seconds between `/cron.php` hits.                             |
+| `ENABLE_PHPBB_CRON`    | `TRUE`  | Set `FALSE` to disable the in-container cron driver.          |
+| `PHPBB_CRON_INTERVAL`  | `300`   | Seconds between `phpbbcli cron:run` invocations.              |
 
 phpBB's cron tasks (prune logs, recalculate stats) only fire on user requests
 by default. On a low-traffic board they may never run, so this image runs an
-s6 longrun worker that curls `/cron.php` periodically. Set
-`ENABLE_PHPBB_CRON=FALSE` if you want to drive cron from an external scheduler
-(e.g. Kubernetes CronJob, host cron) instead.
+s6 longrun worker that invokes `php bin/phpbbcli.php cron:run` periodically.
+Set `ENABLE_PHPBB_CRON=FALSE` if you want to drive cron from an external
+scheduler (e.g. Kubernetes CronJob, host cron) instead.
 
 ## Mounts
 

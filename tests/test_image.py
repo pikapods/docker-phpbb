@@ -119,6 +119,32 @@ class TestImageFilesystem:
         )
         assert r.returncode == 0, "phpbb-cron not registered in s6 user bundle"
 
+    def test_s6_cron_uses_phpbbcli_not_curl(self):
+        # phpBB 3.3.x /cron.php rejects bare hits with HTTP 400 (the route
+        # needs per-task query params), so the worker must drive cron via
+        # the CLI. Lock the wiring at the image-layer test lane.
+        r = _run("cat", "/etc/s6-overlay/s6-rc.d/phpbb-cron/run")
+        assert r.returncode == 0, r.stderr
+        body = r.stdout
+        # Strip shell comments before scanning for active commands — the
+        # header comment intentionally explains *why* we no longer hit
+        # /cron.php and would otherwise trigger the negative check.
+        active = "\n".join(
+            line for line in body.splitlines()
+            if not line.lstrip().startswith("#")
+        )
+        assert "phpbbcli.php cron:run" in active, (
+            "cron worker no longer invokes phpbbcli cron:run — the CLI path "
+            "is the only way to drive cron without per-task query params"
+        )
+        assert "/cron.php" not in active, (
+            "cron worker still references /cron.php in an executable line; "
+            "phpBB 3.3.x returns HTTP 400 for bare hits to that route"
+        )
+        assert "curl" not in active, (
+            "cron worker still shells out to curl; expected phpbbcli only"
+        )
+
     def test_s6_bootstrap_oneshot_installed(self):
         # The base image's docker-php-serversideup-s6-init moves our
         # /etc/entrypoint.d/20-phpbb-bootstrap.sh into /etc/s6-overlay/scripts/

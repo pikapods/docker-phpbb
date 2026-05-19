@@ -120,6 +120,11 @@ def _start_phpbb(name, network, db_kind, db_host):
     cmd = ["docker", "run", "-d", "--name", name, "--network", network]
     for e in env:
         cmd += ["-e", e]
+    # podman rejects `-p 0:8080` (it wants a real port); docker treats 0 as
+    # "pick any free port". Use a random high port so we work under both,
+    # and still avoid collisions when the mariadb + postgres fixtures share
+    # a session.
+    host_port = secrets.randbelow(20000) + 30000
     cmd += [
         "-e", "PHPBB_ADMIN_USER=admin",
         "-e", "PHPBB_ADMIN_PASS=changeme",
@@ -127,7 +132,7 @@ def _start_phpbb(name, network, db_kind, db_host):
         "-e", "PHPBB_BOARD_NAME=Smoke Test Board",
         "-e", "PHPBB_SERVER_NAME=localhost",
         "-e", "PHPBB_CRON_INTERVAL=10",
-        "-p", "0:8080",
+        "-p", f"{host_port}:8080",
         IMAGE,
     ]
     _sh(*cmd)
@@ -325,18 +330,34 @@ def test_cron_longrun_alive(stack):
     )
 
 
-def test_cron_php_hit_recently(stack):
-    # The fixture sets PHPBB_CRON_INTERVAL=10s; give the worker two cycles
-    # to land at least one /cron.php request. The base image's nginx writes
-    # access logs to /dev/stdout (no file at /var/log/nginx/access.log), so
-    # the request shows up in `docker logs` rather than on disk.
-    deadline = time.time() + 30
-    while time.time() < deadline:
-        r = _sh("docker", "logs", stack["bb"], check=False)
-        if "/cron.php" in (r.stdout + r.stderr):
-            return
-        time.sleep(2)
-    pytest.fail("no /cron.php request observed in container logs within 30s")
+def test_cron_cli_runs_successfully(stack):
+    # Sanity-check the exact command the s6 worker invokes. If phpBB's CLI
+    # cron command moves or changes name across versions this will catch it
+    # before the silent-loop regression we just shipped a fix for.
+    r = _exec(
+        stack["bb"], "sh", "-c",
+        "cd /var/www/html && php bin/phpbbcli.php cron:run --no-interaction --no-ansi",
+    )
+    assert r.returncode == 0, (
+        f"phpbbcli cron:run failed (rc={r.returncode}) "
+        f"stdout={r.stdout!r} stderr={r.stderr!r}"
+    )
+
+
+def test_cron_php_endpoint_not_polled(stack):
+    # Regression guard for the curl-/cron.php worker. phpBB 3.3.x returns
+    # HTTP 400 for bare hits, so the old worker was effectively a no-op —
+    # any future refactor that re-introduces it must fail loudly here.
+    # Fixture sets PHPBB_CRON_INTERVAL=10; wait >2 intervals on a fresh log
+    # tail so we only inspect lines emitted during this test.
+    baseline = _sh("docker", "logs", stack["bb"], check=False)
+    start_len = len(baseline.stdout) + len(baseline.stderr)
+    time.sleep(25)
+    after = _sh("docker", "logs", stack["bb"], check=False)
+    new = (after.stdout + after.stderr)[start_len:]
+    assert "/cron.php" not in new, (
+        "cron worker is still hitting /cron.php; expected CLI invocation only"
+    )
 
 
 def test_healthcheck_reports_healthy(stack):
