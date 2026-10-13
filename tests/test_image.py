@@ -43,7 +43,9 @@ class TestImageMetadata:
         assert user in ("www-data", "82"), f"expected www-data/82, got {user!r}"
 
     def test_healthcheck_defined(self, inspect):
-        assert inspect["Config"].get("Healthcheck"), "no Healthcheck defined"
+        # Docker nests it under Config; podman reports it top-level.
+        hc = inspect["Config"].get("Healthcheck") or inspect.get("Healthcheck")
+        assert hc, "no Healthcheck defined"
 
     def test_exposes_8080(self, inspect):
         ports = inspect["Config"].get("ExposedPorts") or {}
@@ -115,9 +117,15 @@ class TestImageFilesystem:
     def test_s6_cron_registered_in_user_bundle(self):
         r = _run(
             "test", "-f",
-            "/etc/s6-overlay/s6-rc.d/user/contents.d/phpbb-cron",
+            "/etc/s6-overlay/user-bundles.d/user/contents.d/phpbb-cron",
         )
         assert r.returncode == 0, "phpbb-cron not registered in s6 user bundle"
+
+    def test_no_legacy_s6_user_bundle(self):
+        # s6-overlay >= 3.2.3.2: a s6-rc.d/user dir switches rc.init into
+        # legacy mode, which ignores user-bundles.d and fails as non-root.
+        r = _run("test", "-e", "/etc/s6-overlay/s6-rc.d/user")
+        assert r.returncode != 0, "legacy /etc/s6-overlay/s6-rc.d/user present"
 
     def test_s6_cron_uses_phpbbcli_not_curl(self):
         # phpBB 3.3.x /cron.php rejects bare hits with HTTP 400 (the route
